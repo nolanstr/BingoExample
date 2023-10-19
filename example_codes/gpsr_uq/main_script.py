@@ -1,13 +1,17 @@
 import numpy as np
-import matplotlib.pyplot as plt
 
 from bingo.evolutionary_algorithms.generalized_crowding import \
                                                 GeneralizedCrowdingEA
+from bingo.selection.bayes_crowding import BayesCrowding
 from bingo.selection.deterministic_crowding import DeterministicCrowding
+from bingo.evolutionary_optimizers.parallel_archipelago import \
+                                            ParallelArchipelago, \
+                                            load_parallel_archipelago_from_file
 from bingo.evaluation.evaluation import Evaluation
 from bingo.evolutionary_optimizers.island import Island
 from bingo.local_optimizers.continuous_local_opt \
-    import ContinuousLocalOptimization
+                               import ContinuousLocalOptimization
+
 from bingo.stats.pareto_front import ParetoFront
 
 from bingo.symbolic_regression import ComponentGenerator, \
@@ -16,28 +20,31 @@ from bingo.symbolic_regression import ComponentGenerator, \
                                       AGraphMutation, \
                                       ExplicitRegression, \
                                       ExplicitTrainingData
-
+from bingo.symbolic_regression.bayes_fitness.bayes_fitness_function \
+                               import BayesFitnessFunction
 from bingo.symbolic_regression.agraph.agraph import AGraph
 
-POP_SIZE = 104
-STACK_SIZE = 48
-MAX_GEN = 20000
+POP_SIZE = 400
+STACK_SIZE = 40
+MAX_GEN = 10000
 FIT_THRESH = -np.inf
 CHECK_FREQ = 50
 MIN_GEN = 500
+VARIANCE_CAPS = [None]*6 + [70]*8
 
 def make_training_data():
-    
-    model = AGraph(equation="3*sin(X_0) + 2*X_0")
-    X = np.linspace(0, np.pi, 50).reshape((-1,1))
-    y = model.evaluate_equation_at(X)
-    training_data = ExplicitTrainingData(x=X, y=y)
 
+    model = AGraph(equation="3*sin(X_0) + 2*X_0")
+    X = np.linspace(0, np.pi, 25).reshape((-1,1))
+    y = model.evaluate_equation_at(X) + \
+            np.random.normal(0, 0.5, size=X.shape)
+    training_data = ExplicitTrainingData(x=X, y=y)
+    
     return training_data
 
-def make_island():
-    
-    
+
+def execute_generational_steps():
+
     training_data = make_training_data()
 
     component_generator = ComponentGenerator(training_data.x.shape[1])
@@ -46,9 +53,6 @@ def make_island():
     component_generator.add_operator("*")
     component_generator.add_operator("sin")
     component_generator.add_operator("cos")
-    component_generator.add_operator("exp")
-    component_generator.add_operator("pow")
-    component_generator.add_operator("sqrt")
 
     crossover = AGraphCrossover()
     mutation = AGraphMutation(component_generator)
@@ -63,11 +67,22 @@ def make_island():
     pareto_front = ParetoFront(secondary_key = lambda ag: ag.get_complexity(), 
                             similarity_function=agraph_similarity)
 
-    evaluator = Evaluation(local_opt_fitness, multiprocess=4)
+    smc_hyperparams = {'num_particles':10,
+                       'mcmc_steps':10,
+                       'ess_threshold':0.75}
 
-    selection_phase = DeterministicCrowding()
+    bff = BayesFitnessFunction(local_opt_fitness,
+                               smc_hyperparams)
+
+    pareto_front = ParetoFront(secondary_key = lambda ag: ag.get_complexity(), 
+                            similarity_function=agraph_similarity)
+
+    evaluator = Evaluation(bff, multiprocess=8)
+
+    selection_phase=BayesCrowding()
     ea = GeneralizedCrowdingEA(evaluator, crossover,
                       mutation, 0.4, 0.4, selection_phase)
+
 
     island = Island(ea, agraph_generator, POP_SIZE)
     opt_result = island.evolve_until_convergence(max_generations=MAX_GEN,
@@ -80,6 +95,5 @@ def agraph_similarity(ag_1, ag_2):
                             ag_1.get_complexity() == ag_2.get_complexity()
 
 if __name__ == '__main__':
-
-    run_bingo()
+    execute_generational_steps()
 
